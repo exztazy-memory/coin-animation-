@@ -1,0 +1,801 @@
+    (function () {
+      const container = document.getElementById('canvas-container');
+
+      // Сцена и камера
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(
+        34,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        100
+      );
+
+      // Рендерер с мягкими тенями и кинематографическим тональным компрессором
+      const renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        powerPreference: 'high-performance'
+      });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.physicallyCorrectLights = true;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.15;
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      container.appendChild(renderer.domElement);
+
+      // 1. Создание студийной HDR-карты отражений с контрастными софтбоксами и черными панелями (Negative Fill)
+      function createStudioEnvMap() {
+        const envCanvas = document.createElement('canvas');
+        envCanvas.width = 1024;
+        envCanvas.height = 512;
+        const ctx = envCanvas.getContext('2d');
+
+        // Глубокий темный фон для контрастных графитовых теней на металле
+        const bgGrad = ctx.createLinearGradient(0, 0, 0, 512);
+        bgGrad.addColorStop(0, '#090a0d');
+        bgGrad.addColorStop(0.5, '#12141a');
+        bgGrad.addColorStop(1, '#040406');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, 1024, 512);
+
+        // Яркие студийные софтбоксы для металлических бликов
+        const boxes = [
+          { x: 240, y: 110, w: 180, h: 260, a: 0.95 },
+          { x: 760, y: 130, w: 150, h: 240, a: 0.75 },
+          { x: 512, y: 60,  w: 360, h: 70,  a: 0.85 },
+          { x: 110, y: 200, w: 60,  h: 300, a: 0.55 },
+          { x: 910, y: 180, w: 70,  h: 280, a: 0.65 }
+        ];
+
+        boxes.forEach(b => {
+          const g = ctx.createRadialGradient(
+            b.x, b.y, 10,
+            b.x, b.y, Math.max(b.w, b.h)
+          );
+          g.addColorStop(0, `rgba(255, 255, 255, ${b.a})`);
+          g.addColorStop(0.45, `rgba(205, 212, 224, ${b.a * 0.55})`);
+          g.addColorStop(1, 'rgba(15, 17, 22, 0)');
+          ctx.fillStyle = g;
+          ctx.fillRect(b.x - b.w, b.y - b.h, b.w * 2, b.h * 2);
+        });
+
+        // Черные поглощающие полосы (Negative Fill) для глубоких теней в металле
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.88)';
+        ctx.fillRect(390, 0, 85, 512);
+        ctx.fillRect(610, 0, 75, 512);
+
+        const texture = new THREE.CanvasTexture(envCanvas);
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        texture.encoding = THREE.sRGBEncoding;
+
+        const pmremGenerator = new THREE.PMREMGenerator(renderer);
+        pmremGenerator.compileEquirectangularShader();
+        const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+        texture.dispose();
+        pmremGenerator.dispose();
+        return envMap;
+      }
+
+      scene.environment = createStudioEnvMap();
+
+      // 2. Генерация текстур лица монеты (Diffuse + AO, Bump, Roughness)
+      function createCoinFaceTextures() {
+        const size = 2048;
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Вспомогательная функция рисования силуэта ястреба (для подложки контактных теней AO)
+        function traceHawkCanvas(ctx, scale) {
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.scale(scale, scale);
+
+          // Главное большое крыло и корпус (динамичный геометрический профиль со скриншота)
+          ctx.beginPath();
+          ctx.moveTo(-290, -250);
+          ctx.lineTo(15, -55);
+          ctx.lineTo(145, -135);
+          ctx.lineTo(120, -45);
+          ctx.lineTo(255, -25);
+          ctx.lineTo(175, 28);
+          ctx.lineTo(95, 25);
+          ctx.lineTo(215, 195);
+          ctx.lineTo(40, 115);
+          ctx.lineTo(-15, 235);
+          ctx.lineTo(-45, 95);
+          ctx.lineTo(-225, 45);
+          ctx.lineTo(-115, -25);
+          ctx.lineTo(-265, -95);
+          ctx.lineTo(-135, -110);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // --- КАРТА ЦВЕТА И ЗАПЕЧЕННЫХ КОНТАКТНЫХ ТЕНЕЙ (DIFFUSE + AO) ---
+        const diffCanvas = document.createElement('canvas');
+        diffCanvas.width = size;
+        diffCanvas.height = size;
+        const dCtx = diffCanvas.getContext('2d');
+
+        // Базовый серый титановый металл с легким радиальным градиентом глубины
+        const baseGrad = dCtx.createRadialGradient(cx, cy, 80, cx, cy, size * 0.48);
+        baseGrad.addColorStop(0, '#b5b9c2');
+        baseGrad.addColorStop(0.58, '#959aa4');
+        baseGrad.addColorStop(0.74, '#60646c'); // Глубокая тень возле внутреннего кольца
+        baseGrad.addColorStop(0.78, '#afb4bd');
+        baseGrad.addColorStop(0.92, '#8e939c');
+        baseGrad.addColorStop(0.96, '#484b52'); // Контактная тень под внешним бортиком
+        baseGrad.addColorStop(1, '#adb2bb');
+        dCtx.fillStyle = baseGrad;
+        dCtx.fillRect(0, 0, size, size);
+
+        // Тонкая круговая шлифовка металла (Brushed Metal)
+        dCtx.save();
+        dCtx.translate(cx, cy);
+        for (let i = 0; i < 420; i++) {
+          const r = 40 + (i / 420) * (size * 0.47);
+          dCtx.beginPath();
+          dCtx.arc(0, 0, r, 0, Math.PI * 2);
+          dCtx.strokeStyle = i % 2 === 0
+            ? 'rgba(255, 255, 255, 0.025)'
+            : 'rgba(0, 0, 0, 0.035)';
+          dCtx.lineWidth = 1.5;
+          dCtx.stroke();
+        }
+        dCtx.restore();
+
+        // Глубокая контактная тень (Ambient Occlusion) вокруг внутреннего ободка
+        dCtx.save();
+        dCtx.translate(cx, cy);
+        dCtx.beginPath();
+        dCtx.arc(0, 0, 690, 0, Math.PI * 2);
+        dCtx.strokeStyle = 'rgba(10, 12, 16, 0.72)';
+        dCtx.lineWidth = 36;
+        dCtx.filter = 'blur(12px)';
+        dCtx.stroke();
+
+        // Внешний канавчатый контур
+        dCtx.beginPath();
+        dCtx.arc(0, 0, 920, 0, Math.PI * 2);
+        dCtx.strokeStyle = 'rgba(8, 10, 14, 0.82)';
+        dCtx.lineWidth = 42;
+        dCtx.stroke();
+        dCtx.restore();
+
+        // Запеченная мягкая тень (AO) под 3D-ястребом в центре
+        dCtx.save();
+        dCtx.filter = 'blur(26px)';
+        dCtx.fillStyle = 'rgba(5, 7, 10, 0.88)';
+        traceHawkCanvas(dCtx, 1.06);
+        dCtx.filter = 'blur(10px)';
+        dCtx.fillStyle = 'rgba(0, 0, 0, 0.95)';
+        traceHawkCanvas(dCtx, 1.01);
+        dCtx.restore();
+
+        // Чеканные засечки и круговая надпись по ободу
+        function drawRingDetails(ctx, isBump) {
+          ctx.save();
+          ctx.translate(cx, cy);
+
+          // Мелкие зубчики вдоль внешнего края
+          const ticks = 120;
+          for (let i = 0; i < ticks; i++) {
+            const angle = (i / ticks) * Math.PI * 2;
+            ctx.save();
+            ctx.rotate(angle);
+            if (!isBump) {
+              ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+              ctx.shadowBlur = 6;
+              ctx.shadowOffsetX = 2;
+              ctx.shadowOffsetY = 2;
+              ctx.fillStyle = '#cfd4dd';
+            } else {
+              ctx.fillStyle = '#ffffff';
+            }
+            ctx.fillRect(-4, -935, 8, 28);
+            ctx.restore();
+          }
+
+          // Круговая рельефная гравировка между кольцами
+          const textRingRadius = 805;
+          const phrase = 'CODE & CASH • HAWK EMPIRE • SYNDICATE • ';
+          const repeatPhrase = phrase + phrase;
+          ctx.font = '900 44px "Inter", sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+
+          for (let i = 0; i < repeatPhrase.length; i++) {
+            const angle = (i / repeatPhrase.length) * Math.PI * 2 - Math.PI / 2;
+            ctx.save();
+            ctx.rotate(angle);
+            ctx.translate(0, -textRingRadius);
+            if (!isBump) {
+              ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+              ctx.shadowBlur = 8;
+              ctx.shadowOffsetY = 4;
+              ctx.fillStyle = '#d4d9e2';
+            } else {
+              ctx.fillStyle = '#f0f0f0';
+            }
+            ctx.fillText(repeatPhrase[i], 0, 0);
+            ctx.restore();
+          }
+
+          // Декоративные рельефные точки по бокам внутри поля
+          const sideDots = [-0.25, 0, 0.25, Math.PI - 0.25, Math.PI, Math.PI + 0.25];
+          sideDots.forEach(a => {
+            ctx.save();
+            ctx.rotate(a);
+            ctx.beginPath();
+            ctx.arc(0, -610, 11, 0, Math.PI * 2);
+            if (!isBump) {
+              ctx.shadowColor = 'rgba(0,0,0,0.9)';
+              ctx.shadowBlur = 6;
+              ctx.fillStyle = '#d0d5de';
+            } else {
+              ctx.fillStyle = '#ffffff';
+            }
+            ctx.fill();
+            ctx.restore();
+          });
+
+          ctx.restore();
+        }
+
+        drawRingDetails(dCtx, false);
+
+        // --- КАРТА ВЫСОТ / РЕЛЬЕФА (BUMP MAP) ---
+        const bumpCanvas = document.createElement('canvas');
+        bumpCanvas.width = size;
+        bumpCanvas.height = size;
+        const bCtx = bumpCanvas.getContext('2d');
+
+        bCtx.fillStyle = '#555555';
+        bCtx.fillRect(0, 0, size, size);
+
+        // Углубление центрального поля
+        bCtx.save();
+        bCtx.translate(cx, cy);
+        const recessGrad = bCtx.createRadialGradient(0, 0, 50, 0, 0, 685);
+        recessGrad.addColorStop(0, '#424242');
+        recessGrad.addColorStop(0.92, '#3a3a3a');
+        recessGrad.addColorStop(1, '#181818');
+        bCtx.fillStyle = recessGrad;
+        bCtx.beginPath();
+        bCtx.arc(0, 0, 685, 0, Math.PI * 2);
+        bCtx.fill();
+
+        // Выступающее кольцо
+        bCtx.strokeStyle = '#e5e5e5';
+        bCtx.lineWidth = 22;
+        bCtx.beginPath();
+        bCtx.arc(0, 0, 692, 0, Math.PI * 2);
+        bCtx.stroke();
+        bCtx.restore();
+
+        drawRingDetails(bCtx, true);
+
+        // --- КАРТА ШЕРОХОВАТОСТИ (ROUGHNESS MAP) ---
+        const roughCanvas = document.createElement('canvas');
+        roughCanvas.width = size;
+        roughCanvas.height = size;
+        const rCtx = roughCanvas.getContext('2d');
+
+        rCtx.fillStyle = '#888888';
+        rCtx.fillRect(0, 0, size, size);
+
+        for (let i = 0; i < 18000; i++) {
+          const x = Math.random() * size;
+          const y = Math.random() * size;
+          const v = 110 + Math.floor(Math.random() * 55);
+          rCtx.fillStyle = `rgb(${v},${v},${v})`;
+          rCtx.fillRect(x, y, 2, 2);
+        }
+
+        const diffTex = new THREE.CanvasTexture(diffCanvas);
+        diffTex.encoding = THREE.sRGBEncoding;
+        diffTex.anisotropy = 8;
+
+        const bumpTex = new THREE.CanvasTexture(bumpCanvas);
+        bumpTex.anisotropy = 8;
+
+        const roughTex = new THREE.CanvasTexture(roughCanvas);
+        roughTex.anisotropy = 8;
+
+        return { diffTex, bumpTex, roughTex };
+      }
+
+      // 3. Текстура ребристого гурта (края монеты) с глубокими тенями в насечках
+      function createMilledEdgeTextures() {
+        const w = 2048;
+        const h = 128;
+
+        const diffC = document.createElement('canvas');
+        diffC.width = w;
+        diffC.height = h;
+        const dCtx = diffC.getContext('2d');
+
+        const bumpC = document.createElement('canvas');
+        bumpC.width = w;
+        bumpC.height = h;
+        const bCtx = bumpC.getContext('2d');
+
+        const ridges = 180;
+        const step = w / ridges;
+
+        for (let i = 0; i < ridges; i++) {
+          const x = i * step;
+
+          const g = dCtx.createLinearGradient(x, 0, x + step, 0);
+          g.addColorStop(0, '#23252a');
+          g.addColorStop(0.25, '#7e838c');
+          g.addColorStop(0.5, '#d0d5de');
+          g.addColorStop(0.75, '#6c7078');
+          g.addColorStop(1, '#1d1f24');
+          dCtx.fillStyle = g;
+          dCtx.fillRect(x, 0, step + 1, h);
+
+          const bg = bCtx.createLinearGradient(x, 0, x + step, 0);
+          bg.addColorStop(0, '#000000');
+          bg.addColorStop(0.5, '#ffffff');
+          bg.addColorStop(1, '#000000');
+          bCtx.fillStyle = bg;
+          bCtx.fillRect(x, 0, step + 1, h);
+        }
+
+        const vGrad = dCtx.createLinearGradient(0, 0, 0, h);
+        vGrad.addColorStop(0, 'rgba(0,0,0,0.55)');
+        vGrad.addColorStop(0.18, 'rgba(0,0,0,0)');
+        vGrad.addColorStop(0.82, 'rgba(0,0,0,0)');
+        vGrad.addColorStop(1, 'rgba(0,0,0,0.55)');
+        dCtx.fillStyle = vGrad;
+        dCtx.fillRect(0, 0, w, h);
+
+        const edgeDiff = new THREE.CanvasTexture(diffC);
+        edgeDiff.encoding = THREE.sRGBEncoding;
+        edgeDiff.wrapS = THREE.RepeatWrapping;
+
+        const edgeBump = new THREE.CanvasTexture(bumpC);
+        edgeBump.wrapS = THREE.RepeatWrapping;
+
+        return { edgeDiff, edgeBump };
+      }
+
+      const { diffTex, bumpTex, roughTex } = createCoinFaceTextures();
+      const { edgeDiff, edgeBump } = createMilledEdgeTextures();
+
+      // 4. Сборка многослойной 3D-монеты с реальным рельефом и самозатенением
+      const stageGroup = new THREE.Group();
+      scene.add(stageGroup);
+
+      const coinGroup = new THREE.Group();
+      stageGroup.add(coinGroup);
+
+      const coinRadius = 2.65;
+      const coinThickness = 0.28;
+
+      const faceMaterial = new THREE.MeshStandardMaterial({
+        map: diffTex,
+        bumpMap: bumpTex,
+        bumpScale: 0.042,
+        roughnessMap: roughTex,
+        roughness: 0.36,
+        metalness: 0.92,
+        envMapIntensity: 1.55
+      });
+
+      const edgeMaterial = new THREE.MeshStandardMaterial({
+        map: edgeDiff,
+        bumpMap: edgeBump,
+        bumpScale: 0.055,
+        roughness: 0.32,
+        metalness: 0.95,
+        envMapIntensity: 1.6
+      });
+
+      const rimMetalMaterial = new THREE.MeshStandardMaterial({
+        color: 0xc4c9d4,
+        roughness: 0.22,
+        metalness: 0.96,
+        envMapIntensity: 1.75
+      });
+
+      const darkGrooveMaterial = new THREE.MeshStandardMaterial({
+        color: 0x3b3e45,
+        roughness: 0.55,
+        metalness: 0.85,
+        envMapIntensity: 1.1
+      });
+
+      const hawkMaterial = new THREE.MeshStandardMaterial({
+        color: 0xd0d5e0,
+        roughness: 0.20,
+        metalness: 0.96,
+        envMapIntensity: 1.85,
+        flatShading: true
+      });
+
+      const hawkBaseShadowMaterial = new THREE.MeshStandardMaterial({
+        color: 0x202227,
+        roughness: 0.7,
+        metalness: 0.75,
+        envMapIntensity: 0.7
+      });
+
+      const coreCylinderGeo = new THREE.CylinderGeometry(
+        coinRadius,
+        coinRadius,
+        coinThickness,
+        128,
+        1,
+        false
+      );
+      coreCylinderGeo.rotateX(Math.PI / 2);
+
+      const coreCoinMesh = new THREE.Mesh(coreCylinderGeo, [
+        edgeMaterial,
+        faceMaterial,
+        faceMaterial
+      ]);
+      coreCoinMesh.castShadow = true;
+      coreCoinMesh.receiveShadow = true;
+      coinGroup.add(coreCoinMesh);
+
+      function buildReliefSide(sideSign) {
+        const sideGroup = new THREE.Group();
+        const zSurface = (coinThickness / 2) * sideSign;
+
+        // 1) Высокий внешний профилированный бортик
+        const outerRimShape = new THREE.Shape();
+        outerRimShape.absarc(0, 0, coinRadius, 0, Math.PI * 2, false);
+        const outerHole = new THREE.Path();
+        outerHole.absarc(0, 0, coinRadius * 0.915, 0, Math.PI * 2, true);
+        outerRimShape.holes.push(outerHole);
+
+        const outerRimGeo = new THREE.ExtrudeGeometry(outerRimShape, {
+          depth: 0.068,
+          bevelEnabled: true,
+          bevelSegments: 4,
+          steps: 1,
+          bevelSize: 0.022,
+          bevelThickness: 0.025,
+          curveSegments: 96
+        });
+
+        const outerRimMesh = new THREE.Mesh(outerRimGeo, rimMetalMaterial);
+        outerRimMesh.position.z = sideSign > 0 ? zSurface - 0.01 : zSurface - 0.058;
+        outerRimMesh.castShadow = true;
+        outerRimMesh.receiveShadow = true;
+        sideGroup.add(outerRimMesh);
+
+        // 2) Внутреннее рельефное кольцо
+        const innerRingShape = new THREE.Shape();
+        innerRingShape.absarc(0, 0, coinRadius * 0.685, 0, Math.PI * 2, false);
+        const innerHole = new THREE.Path();
+        innerHole.absarc(0, 0, coinRadius * 0.652, 0, Math.PI * 2, true);
+        innerRingShape.holes.push(innerHole);
+
+        const innerRingGeo = new THREE.ExtrudeGeometry(innerRingShape, {
+          depth: 0.042,
+          bevelEnabled: true,
+          bevelSegments: 3,
+          steps: 1,
+          bevelSize: 0.012,
+          bevelThickness: 0.015,
+          curveSegments: 96
+        });
+
+        const innerRingMesh = new THREE.Mesh(innerRingGeo, rimMetalMaterial);
+        innerRingMesh.position.z = sideSign > 0 ? zSurface - 0.005 : zSurface - 0.037;
+        innerRingMesh.castShadow = true;
+        innerRingMesh.receiveShadow = true;
+        sideGroup.add(innerRingMesh);
+
+        // Темная канавка под внутренним кольцом
+        const grooveGeo = new THREE.RingGeometry(
+          coinRadius * 0.628,
+          coinRadius * 0.652,
+          96
+        );
+        const grooveMesh = new THREE.Mesh(grooveGeo, darkGrooveMaterial);
+        grooveMesh.position.z = zSurface + 0.002 * sideSign;
+        if (sideSign < 0) grooveMesh.rotation.y = Math.PI;
+        sideGroup.add(grooveMesh);
+
+        // 3) Многослойный 3D-ястреб по центру
+        const hawkGroup = new THREE.Group();
+        const s = 0.0044;
+
+        function createPolygonShape(pts) {
+          const shape = new THREE.Shape();
+          pts.forEach((pt, idx) => {
+            const x = pt[0] * s;
+            const y = -pt[1] * s;
+            if (idx === 0) shape.moveTo(x, y);
+            else shape.lineTo(x, y);
+          });
+          shape.closePath();
+          return shape;
+        }
+
+        const baseSilhouettePts = [
+          [-295, -255], [15, -58], [148, -138], [122, -48],
+          [260, -25], [178, 30], [98, 28], [220, 198],
+          [42, 118], [-15, 240], [-48, 98], [-230, 48],
+          [-118, -25], [-270, -98], [-138, -112]
+        ];
+        const baseHawkGeo = new THREE.ExtrudeGeometry(
+          createPolygonShape(baseSilhouettePts),
+          {
+            depth: 0.026,
+            bevelEnabled: true,
+            bevelSegments: 2,
+            bevelSize: 0.022,
+            bevelThickness: 0.015
+          }
+        );
+        const baseHawkMesh = new THREE.Mesh(baseHawkGeo, hawkBaseShadowMaterial);
+        baseHawkMesh.position.z = sideSign > 0 ? zSurface : zSurface - 0.026;
+        baseHawkMesh.castShadow = true;
+        baseHawkMesh.receiveShadow = true;
+        hawkGroup.add(baseHawkMesh);
+
+        const hawkFacets = [
+          {
+            pts: [[-290, -250], [18, -52], [-42, 12], [-145, -105]],
+            depth: 0.095,
+            bevel: 0.016,
+            tiltX: 0.04,
+            tiltY: -0.03
+          },
+          {
+            pts: [[-265, -95], [-110, -90], [-18, 22], [-125, -20]],
+            depth: 0.078,
+            bevel: 0.014,
+            tiltX: -0.03,
+            tiltY: 0.02
+          },
+          {
+            pts: [[-225, 45], [-98, -18], [-12, 48], [-55, 92]],
+            depth: 0.065,
+            bevel: 0.012,
+            tiltX: 0.02,
+            tiltY: 0.03
+          },
+          {
+            pts: [[15, -55], [140, -32], [105, 35], [-20, 88], [-48, 10]],
+            depth: 0.105,
+            bevel: 0.018,
+            tiltX: 0.0,
+            tiltY: 0.04
+          },
+          {
+            pts: [[10, -52], [145, -135], [118, -35]],
+            depth: 0.058,
+            bevel: 0.012,
+            tiltX: -0.05,
+            tiltY: -0.02
+          },
+          {
+            pts: [[110, -45], [255, -25], [175, 28], [95, 22]],
+            depth: 0.092,
+            bevel: 0.015,
+            tiltX: 0.03,
+            tiltY: 0.05
+          },
+          {
+            pts: [[75, 22], [215, 195], [38, 112], [12, 45]],
+            depth: 0.082,
+            bevel: 0.014,
+            tiltX: -0.04,
+            tiltY: 0.02
+          },
+          {
+            pts: [[15, 48], [45, 112], [-15, 235], [-45, 95]],
+            depth: 0.068,
+            bevel: 0.013,
+            tiltX: 0.03,
+            tiltY: -0.04
+          }
+        ];
+
+        hawkFacets.forEach(f => {
+          const shape = createPolygonShape(f.pts);
+          const geo = new THREE.ExtrudeGeometry(shape, {
+            depth: f.depth,
+            bevelEnabled: true,
+            bevelSegments: 3,
+            steps: 1,
+            bevelSize: f.bevel,
+            bevelThickness: f.bevel * 1.2
+          });
+
+          const mesh = new THREE.Mesh(geo, hawkMaterial);
+          mesh.position.z = sideSign > 0
+            ? zSurface + 0.008
+            : zSurface - f.depth - 0.008;
+
+          mesh.rotation.x = f.tiltX * sideSign;
+          mesh.rotation.y = f.tiltY * sideSign;
+
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          hawkGroup.add(mesh);
+        });
+
+        sideGroup.add(hawkGroup);
+        coinGroup.add(sideGroup);
+      }
+
+      buildReliefSide(1);
+      buildReliefSide(-1);
+
+      // 5. Настройка драматического студийного освещения с реальными тенями
+      const ambientLight = new THREE.AmbientLight(0xd8e0f0, 0.35);
+      scene.add(ambientLight);
+
+      const keyLight = new THREE.DirectionalLight(0xffffff, 3.6);
+      keyLight.position.set(5.2, 5.8, 4.4);
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.width = 2048;
+      keyLight.shadow.mapSize.height = 2048;
+      keyLight.shadow.camera.near = 1;
+      keyLight.shadow.camera.far = 20;
+      const d = 3.5;
+      keyLight.shadow.camera.left = -d;
+      keyLight.shadow.camera.right = d;
+      keyLight.shadow.camera.top = d;
+      keyLight.shadow.camera.bottom = -d;
+      keyLight.shadow.bias = -0.0008;
+      keyLight.shadow.radius = 2.5;
+      stageGroup.add(keyLight);
+      stageGroup.add(keyLight.target);
+
+      const rimLight = new THREE.DirectionalLight(0xcfdfff, 2.4);
+      rimLight.position.set(-5.5, 2.5, -4.2);
+      stageGroup.add(rimLight);
+
+      const bounceLight = new THREE.DirectionalLight(0x8a95aa, 1.1);
+      bounceLight.position.set(0, -5.5, 2.5);
+      stageGroup.add(bounceLight);
+
+      // 6. Мягкая динамическая падающая тень под монетой
+      function createFloorShadowTexture() {
+        const c = document.createElement('canvas');
+        c.width = 512;
+        c.height = 512;
+        const ctx = c.getContext('2d');
+        const g = ctx.createRadialGradient(256, 256, 15, 256, 256, 240);
+        g.addColorStop(0, 'rgba(0, 0, 0, 0.85)');
+        g.addColorStop(0.45, 'rgba(0, 0, 0, 0.42)');
+        g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, 512, 512);
+        return new THREE.CanvasTexture(c);
+      }
+
+      const shadowPlaneGeo = new THREE.PlaneGeometry(5.6, 1.8);
+      const shadowPlaneMat = new THREE.MeshBasicMaterial({
+        map: createFloorShadowTexture(),
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.9
+      });
+      const floorShadowMesh = new THREE.Mesh(shadowPlaneGeo, shadowPlaneMat);
+      floorShadowMesh.position.set(0, -3.22, 0);
+      floorShadowMesh.rotation.x = -Math.PI / 2;
+      stageGroup.add(floorShadowMesh);
+
+      coinGroup.rotation.z = 0.05;
+
+      // Адаптивный расчет дистанции камеры и отступа снизу от надписи ПРИВЕТ
+      function updateCameraLayout() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const aspect = w / h;
+
+        camera.aspect = aspect;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+
+        // Полный диаметр монеты с учетом выступающего бортика
+        const coinDiameter = (coinRadius + 0.04) * 2;
+        const fovRad = (camera.fov * Math.PI) / 180;
+        const halfTan = Math.tan(fovRad / 2);
+
+        // На телефоне монета занимает ~84% ширины экрана, на ПК ~60% высоты экрана
+        const isPortrait = aspect < 0.95;
+        const maxWidthRatio = isPortrait ? 0.84 : 0.72;
+        const maxHeightRatio = isPortrait ? 0.56 : 0.60;
+
+        const distForWidth = (coinDiameter / maxWidthRatio) / (2 * halfTan * aspect);
+        const distForHeight = (coinDiameter / maxHeightRatio) / (2 * halfTan);
+
+        const targetZ = Math.max(distForWidth, distForHeight);
+        camera.position.set(0, 0.12, targetZ);
+
+        // Смещаем сцену с монетой чуть ниже центра, чтобы она никогда не касалась текста ПРИВЕТ
+        const visibleHeight = 2 * targetZ * halfTan;
+        stageGroup.position.y = -visibleHeight * (isPortrait ? 0.055 : 0.075);
+      }
+
+      updateCameraLayout();
+      window.addEventListener('resize', updateCameraLayout);
+
+      // 7. Интерактивное вращение мышью/пальцем + плавное автовращение
+      let isDragging = false;
+      let prevX = 0;
+      let prevY = 0;
+      let targetVelY = 0.016;
+      let velY = 0.016;
+      let velX = 0;
+      let tiltX = 0.08;
+
+      function onPointerDown(e) {
+        isDragging = true;
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        prevX = clientX;
+        prevY = clientY;
+      }
+
+      function onPointerMove(e) {
+        if (!isDragging) return;
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const dx = clientX - prevX;
+        const dy = clientY - prevY;
+        prevX = clientX;
+        prevY = clientY;
+
+        velY = dx * 0.008;
+        velX = dy * 0.005;
+        coinGroup.rotation.y += velY;
+        tiltX = Math.max(-0.55, Math.min(0.55, tiltX + velX));
+      }
+
+      function onPointerUp() {
+        isDragging = false;
+      }
+
+      container.addEventListener('mousedown', onPointerDown);
+      window.addEventListener('mousemove', onPointerMove);
+      window.addEventListener('mouseup', onPointerUp);
+
+      container.addEventListener('touchstart', onPointerDown, { passive: true });
+      window.addEventListener('touchmove', onPointerMove, { passive: true });
+      window.addEventListener('touchend', onPointerUp);
+
+      // 8. Анимационный цикл
+      const clock = new THREE.Clock();
+
+      function animate() {
+        requestAnimationFrame(animate);
+        const t = clock.getElapsedTime();
+
+        if (!isDragging) {
+          velY += (targetVelY - velY) * 0.04;
+          coinGroup.rotation.y += velY;
+          tiltX += (0.08 - tiltX) * 0.04;
+        }
+
+        // Легкое парение монеты в воздухе
+        const floatY = Math.sin(t * 1.7) * 0.08;
+        coinGroup.position.y = floatY;
+        coinGroup.rotation.x = tiltX + Math.sin(t * 1.1) * 0.03;
+
+        // Синхронизация ширины нижней тени с углом поворота монеты
+        const cosAngle = Math.abs(Math.cos(coinGroup.rotation.y));
+        floorShadowMesh.scale.x = 0.28 + cosAngle * 0.72;
+        floorShadowMesh.scale.y = 0.85 - floatY * 0.4;
+        floorShadowMesh.material.opacity = 0.72 - floatY * 0.2;
+
+        renderer.render(scene, camera);
+      }
+
+      animate();
+    })();
