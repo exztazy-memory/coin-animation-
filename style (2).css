@@ -1,0 +1,93 @@
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 54%, #14151a 0%, #08090c 55%, #020203 100%);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Переливная черно-белая надпись ПРИВЕТ */
+    .header-wrap {
+      position: fixed;
+      top: 4.5vh;
+      left: 0;
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+      pointer-events: none;
+      padding: 0 16px;
+    }
+
+    .shimmer-title {
+      font-size: clamp(2.1rem, 5.6vw, 4.8rem);
+      font-weight: 900;
+      letter-spacing: 0.28em;
+      padding-left: 0.28em;
+      text-transform: uppercase;
+      text-align: center;
+      background: linear-gradient(
+        110deg,
+        #050505 0%,
+        #1c1c1c 18%,
+        #7a7a7a 32%,
+        #ffffff 48%,
+        #f2f2f2 52%,
+        #5e5e5e 66%,
+        #0a0a0a 82%,
+        #ffffff 100%
+      );
+      background-size: 260% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      -webkit-text-stroke: 1px rgba(255, 255, 255, 0.16);
+      filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.95))
+              drop-shadow(0 0 22px rgba(255, 255, 255, 0.14));
+      animation: bwShimmer 4.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+
+    @keyframes bwShimmer {
+      0% {
+        background-position: 160% 50%;
+        filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.95))
+                drop-shadow(0 0 12px rgba(255, 255, 255, 0.06));
+      }
+      50% {
+        background-position: 0% 50%;
+        filter: drop-shadow(0 14px 34px rgba(0, 0, 0, 0.98))
+                drop-shadow(0 0 32px rgba(255, 255, 255, 0.32));
+      }
+      100% {
+        background-position: -160% 50%;
+        filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.95))
+                drop-shadow(0 0 12px rgba(255, 255, 255, 0.06));
+      }
+    }
+
+    /* Контейнер 3D сцены по центру экрана */
+    #canvas-container {
+      width: 100vw;
+      height: 100vh;
+      position: relative;
+      z-index: 1;
+      cursor: grab;
+      touch-action: none;
+    }
+
+    #canvas-container:active {
+      cursor: grabbing;
+    }
